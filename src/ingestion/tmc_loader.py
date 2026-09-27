@@ -1,6 +1,7 @@
 """Read metadata-labelled TMC scientific arrays and browse PNG products."""
 
 from pathlib import Path
+from numbers import Integral, Real
 from typing import Any
 
 import cv2
@@ -19,7 +20,8 @@ def _dtype(data_type: str) -> np.dtype[Any]:
     return np.dtype(supported[data_type])
 
 
-def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any]) -> NDArray[Any]:
+def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any],
+              row_range: tuple[int, int] | None = None) -> NDArray[Any]:
     """Validate the complete binary layout before reading unchanged samples."""
     height, width = metadata["image_height"], metadata["image_width"]
     offset = metadata["offset_bytes"]
@@ -30,6 +32,15 @@ def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any]) -> NDA
             f"and offset {offset} require {expected} bytes; label declares "
             f"{metadata['file_size_bytes']} bytes"
         )
+    if row_range is not None:
+        start, stop = row_range
+        sequence = metadata["axis_sequence"]
+        contiguous_rows = ((sequence["Line"] == 1 and metadata["axis_index_order"] == "Last Index Fastest")
+                           or (sequence["Line"] == 2 and metadata["axis_index_order"] == "First Index Fastest"))
+        if not contiguous_rows:
+            raise ValueError("Row extraction requires contiguous Sample values within each Line")
+        offset += start * width * dtype.itemsize
+        height = stop - start
     samples = np.fromfile(path, dtype=dtype, count=height * width, offset=offset)
     if samples.size != height * width:
         raise ValueError(f"File-size mismatch while reading {path}: incomplete image data")
@@ -42,12 +53,15 @@ def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any]) -> NDA
 
 def load_tmc_image(
     image_path: str | Path, metadata_path: str | Path | None = None,
+    *, row_range: tuple[int, int] | None = None,
 ) -> ImageData:
     """Load TMC .img samples or a browse .png, preserving dtype and values.
 
     Requires a PDS4 label (adjacent .xml by default). FileNotFoundError
     identifies absent input; ValueError identifies malformed metadata,
     unsupported types/layouts, corrupt PNGs, and size/dimension mismatches.
+    Optional row_range is a zero-based [start, stop) raw row interval; only
+    those rows are read. Source metadata stays intact, with a subset record.
     PNG dimensions/dtype describe decoded pixels, while file_size describes
     the compressed file. No calibration or visualization conversion is applied.
     """
@@ -70,8 +84,15 @@ def load_tmc_image(
             f"found {actual_size} bytes"
         )
     dtype = _dtype(metadata["data_type"])
+    if row_range is not None:
+        if (not isinstance(row_range, tuple) or len(row_range) != 2
+                or any(isinstance(v, bool) or not isinstance(v, Integral) for v in row_range)
+                or not 0 <= row_range[0] < row_range[1] <= metadata["image_height"]):
+            raise ValueError("row_range must be integer (start, stop) within image height, start < stop")
+        if path.suffix.lower() != ".img":
+            raise ValueError("Row extraction is supported only for raw .img products")
     if path.suffix.lower() == ".img":
-        data = _read_raw(path, metadata, dtype)
+        data = _read_raw(path, metadata, dtype, row_range)
         kind = "raw"
     else:
         if metadata["offset_bytes"] != 0:
@@ -85,8 +106,61 @@ def load_tmc_image(
             raise ValueError(f"Invalid PNG image data: {path}")
         kind = "browse"
     expected_shape = (metadata["image_height"], metadata["image_width"])
+    if row_range is not None:
+        expected_shape = (row_range[1] - row_range[0], metadata["image_width"])
+        metadata["subset"] = {"row_start": int(row_range[0]), "row_stop_exclusive": int(row_range[1]),
+                              "image_height": expected_shape[0], "image_width": expected_shape[1]}
     if data.shape != expected_shape:
         raise ValueError(f"Dimension mismatch: label specifies {expected_shape}, decoded {data.shape}")
     if data.dtype != dtype:
         raise ValueError(f"Data type mismatch: label specifies {dtype}, decoded {data.dtype}")
     return ImageData(data, metadata, path, label, "TMC", kind)
+
+
+def latitude_row_range(metadata: dict[str, Any], latitude_min: float,
+                       latitude_max: float) -> tuple[int, int]:
+    """Approximate a full-width latitude strip using linear footprint edges.
+
+    Corner latitudes are treated as first/last row centers. Each side is
+    interpolated independently; take the envelope and round outward. Supports
+    either along-track direction. Rejects out-of-footprint requests, constant
+    latitude edges and edges running in opposing directions. This four-corner
+    approximation is not orthorectification or a per-pixel geolocation model.
+    Returned indices are zero-based [start, stop), clipped to image bounds.
+    """
+    for value in (latitude_min, latitude_max):
+        if isinstance(value, bool) or not isinstance(value, Real) or not np.isfinite(value) or not -90 <= value <= 90:
+            raise ValueError("Latitude bounds must be finite degrees in [-90, 90]")
+    if latitude_min >= latitude_max:
+        raise ValueError("latitude_min must be less than latitude_max")
+    height = metadata.get("image_height")
+    if isinstance(height, bool) or not isinstance(height, Integral) or height < 2:
+        raise ValueError("Image height must be an integer >= 2")
+    endpoints = []
+    directions = []
+    for side in ("left", "right"):
+        top, bottom = metadata.get(f"upper_{side}_latitude"), metadata.get(f"lower_{side}_latitude")
+        if any(isinstance(v, bool) or not isinstance(v, Real) or not np.isfinite(v) or not -90 <= v <= 90 for v in (top, bottom)):
+            raise ValueError("Missing or invalid footprint corner latitude")
+        if abs(bottom - top) < 1e-12:
+            raise ValueError("Cannot infer rows from a constant latitude edge")
+        if latitude_min < min(top, bottom) or latitude_max > max(top, bottom):
+            raise ValueError("Requested latitude interval is outside the footprint edge coverage")
+        directions.append(np.sign(bottom - top))
+        endpoints.extend((lat - top) / (bottom - top) * (height - 1) for lat in (latitude_min, latitude_max))
+    if directions[0] != directions[1]:
+        raise ValueError("Footprint edges have opposing latitude directions")
+    return max(0, int(np.floor(min(endpoints)))), min(height, int(np.ceil(max(endpoints))) + 1)
+
+
+def load_tmc_latitude_region(image_path: str | Path, latitude_min: float,
+                             latitude_max: float, metadata_path: str | Path | None = None) -> ImageData:
+    """Read only the approximate latitude strip, preserving original sample values."""
+    label = Path(metadata_path) if metadata_path is not None else Path(image_path).with_suffix(".xml")
+    metadata = read_metadata(label)
+    rows = latitude_row_range(metadata, latitude_min, latitude_max)
+    result = load_tmc_image(image_path, label, row_range=rows)
+    result.metadata["subset"].update({"requested_latitude_min": latitude_min,
+        "requested_latitude_max": latitude_max,
+        "geolocation_method": "linear interpolation of both footprint edges; outward-rounded row envelope"})
+    return result
