@@ -164,3 +164,37 @@ def load_tmc_latitude_region(image_path: str | Path, latitude_min: float,
         "requested_latitude_max": latitude_max,
         "geolocation_method": "linear interpolation of both footprint edges; outward-rounded row envelope"})
     return result
+
+
+def row_subregion_footprint(metadata: dict[str, Any], start_row: int,
+                            stop_row: int) -> dict[str, dict[str, float]]:
+    """Approximate four corners for [start_row, stop_row), without reading pixels.
+
+    Consistent with latitude_row_range: product corners represent first/last
+    row centers, so fractions are start/(height-1) and (stop-1)/(height-1).
+    Left and right edges interpolate independently, including longitude along
+    the shortest arc. Output longitudes use 0..360 degrees east. This is only
+    product-corner interpolation, NOT precise per-pixel geolocation.
+    """
+    height = metadata.get("image_height")
+    if (isinstance(height, bool) or not isinstance(height, Integral) or height < 2
+            or any(isinstance(v, bool) or not isinstance(v, Integral) for v in (start_row, stop_row))
+            or not 0 <= start_row < stop_row <= height):
+        raise ValueError("Invalid row interval or full image height")
+    corners = {}
+    for side in ("left", "right"):
+        values = [metadata.get(f"{edge}_{side}_{axis}") for edge in ("upper", "lower")
+                  for axis in ("latitude", "longitude")]
+        if any(isinstance(v, bool) or not isinstance(v, Real) or not np.isfinite(v) for v in values):
+            raise ValueError("Missing or invalid footprint coordinates")
+        lat0, lon0, lat1, lon1 = values
+        if not (-90 <= lat0 <= 90 and -90 <= lat1 <= 90 and -180 <= lon0 <= 360 and -180 <= lon1 <= 360):
+            raise ValueError("Footprint coordinates outside supported degree ranges")
+        delta_lon = (lon1 - lon0 + 180) % 360 - 180
+        if abs(delta_lon) == 180:
+            raise ValueError("Ambiguous longitude interpolation across 180 degrees")
+        for edge, row in (("upper", start_row), ("lower", stop_row - 1)):
+            fraction = row / (height - 1)
+            corners[f"{edge}_{side}"] = {"latitude": float(lat0 + fraction * (lat1 - lat0)),
+                                         "longitude": float((lon0 + fraction * delta_lon) % 360)}
+    return corners
