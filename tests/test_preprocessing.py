@@ -28,8 +28,7 @@ class PreprocessingTests(unittest.TestCase):
                 self.assertEqual(result.data.shape, source.shape)
                 self.assertEqual(result.data.dtype, np.float32)
                 self.assertEqual(result.output_range[0], 0.0)
-                expected_max = 1.0 if dtype == np.uint8 else 249.9 / 655.35
-                self.assertAlmostEqual(result.output_range[1], expected_max, places=6)
+                self.assertEqual(result.output_range[1], 1.0)
                 self.assertTrue(np.isfinite(result.data).all())
                 self.assertLessEqual(result.data.max(), 1)
                 self.assertFalse(np.shares_memory(result.data, source))
@@ -52,10 +51,10 @@ class PreprocessingTests(unittest.TestCase):
 
     def test_low_contrast_gain_is_limited(self) -> None:
         image = np.full((20, 20), 30000, dtype=np.uint16)
-        image[:, 10:] += 1
+        image[:, 10:] += 2
         output = normalize_intensity(image)
         self.assertGreater(output.max(), 0)
-        self.assertLess(output.max(), 0.002)
+        self.assertLess(output.max(), 0.007)
 
     def test_sparse_structure_not_erased(self) -> None:
         image = np.zeros((100, 100), dtype=np.uint16)
@@ -65,10 +64,49 @@ class PreprocessingTests(unittest.TestCase):
         self.assertEqual(np.count_nonzero(output), 1)
 
     def test_percentile_clipping_with_gain_limit(self) -> None:
-        image = np.arange(101, dtype=np.uint16).reshape(1, 101)
+        image = (30000 + np.arange(101, dtype=np.uint16)).reshape(1, 101)
         output = normalize_intensity(image, 10, 90)
         self.assertEqual(output[0, 90], output[0, 100])
-        self.assertAlmostEqual(float(output.max()), 80 / 655.35, places=6)
+        self.assertAlmostEqual(float(output.max()), 80 / 300.9, places=6)
+
+    def test_low_dynamic_range_independent_of_container(self) -> None:
+        image = np.tile(np.arange(60, 131, dtype=np.uint8), (20, 1))
+        wider = image.astype(np.uint16)
+        before = wider.copy()
+        wider.flags.writeable = False
+        output = normalize_intensity(wider)
+        np.testing.assert_array_equal(output, normalize_intensity(image))
+        low, high = np.percentile(image, [1, 99])
+        expected = np.clip((image.astype(np.float32) - low) / (high - low), 0, 1)
+        np.testing.assert_allclose(output, expected, atol=1e-7)
+        np.testing.assert_array_equal(wider, before)
+        self.assertEqual(output.dtype, np.float32)
+        self.assertEqual((output.min(), output.max()), (0, 1))
+
+    def test_one_count_and_constant_guards(self) -> None:
+        for dtype in (np.uint8, np.uint16):
+            for baseline in (0, 100):
+                image = np.full((10, 10), baseline, dtype=dtype)
+                np.testing.assert_array_equal(normalize_intensity(image), 0)
+                image[:, 5:] += 1
+                np.testing.assert_array_equal(normalize_intensity(image), 0)
+
+    def test_nearly_constant_floats(self) -> None:
+        image = np.full((10, 10), 0.5, dtype=np.float64)
+        image[:, 5:] += 1e-6
+        output = normalize_intensity(image)
+        self.assertGreater(output.max(), 0)
+        self.assertLess(output.max(), 0.001)
+        for baseline in (0.0, 0.5):
+            image.fill(baseline)
+            image[:, 5:] += 1e-10
+            np.testing.assert_array_equal(normalize_intensity(image), 0)
+
+    def test_float_gain_bound_near_zero(self) -> None:
+        image = np.tile(np.linspace(0, 1e-5, 100, dtype=np.float32), (10, 1))
+        output = normalize_intensity(image)
+        self.assertTrue(np.isfinite(output).all())
+        self.assertLessEqual(output.max(), 0.001)
 
     def test_float_input(self) -> None:
         image = np.linspace(0, 1, 100, dtype=np.float64).reshape(10, 10)

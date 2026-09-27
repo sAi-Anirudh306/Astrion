@@ -15,7 +15,11 @@ from .normalization import normalize_intensity, validate_number
 
 @dataclass(frozen=True)
 class PreprocessingConfig:
-    """Conservative defaults; spatial filter scales are measured in pixels."""
+    """Conservative defaults; spatial filter scales are measured in pixels.
+
+    min_span is a fraction of the observed percentile-bound intensity scale,
+    not the container dtype range; see normalize_intensity for flatness guards.
+    """
 
     lower_percentile: float = 1.0
     upper_percentile: float = 99.0
