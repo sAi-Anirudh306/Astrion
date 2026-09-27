@@ -1,0 +1,21 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Chandrayaan / experimental datasets
+data/raw/
+data/test/
+data/processed/
+
+# Generated experiment results
+results/
+
+# IDE
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
