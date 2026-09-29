@@ -1,0 +1,2 @@
+# Optional presentation layer; use the existing project virtual environment.
+streamlit==1.64.0

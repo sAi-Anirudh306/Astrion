@@ -1,0 +1,47 @@
+.stApp { background: #090a10; color: #e9eaf2; }
+.block-container { max-width: 1480px; padding: 2rem 3rem 3rem; }
+header[data-testid="stHeader"] { background: transparent; }
+[data-testid="stToolbar"] { visibility: hidden; }
+h1,h2,h3,p { font-family: Inter, "Segoe UI", Arial, sans-serif; }
+.nav { display:flex; justify-content:space-between; align-items:center; padding:0 0 22px; border-bottom:1px solid #252633; }
+.wordmark { font-size:21px; font-weight:650; letter-spacing: .3em; color:#f4f3ff; }
+.eyebrow { font-size:11px; font-weight:600; letter-spacing:.17em; text-transform:uppercase; color:#a99bea; }
+.nav-note { font-size:11px; color:#999bad; letter-spacing:.12em; }
+.hero { position:relative; min-height:460px; display:flex; align-items:center; overflow:hidden; border-bottom:1px solid #252633; margin-bottom:24px; }
+.hero img { position:absolute; right:0; width:76%; height:100%; object-fit:cover; object-position:center; opacity:.85; }
+.hero:after { content:""; position:absolute; inset:0; background:linear-gradient(90deg,#090a10 2%,rgba(9,10,16,.95) 20%,rgba(9,10,16,.18) 73%,transparent); }
+.hero-copy { z-index:1; position:relative; padding:40px 0; max-width:560px; }
+.hero h1 { font-size:66px; line-height:1.03; font-weight:580; letter-spacing:-.04em; margin:20px 0; }
+.hero p { color:#b8b9c9; font-size:16px; line-height:1.7; max-width:425px; }
+.hero .tagline { color:#eeedf5; font-size:19px; }
+.hero-foot { margin-top:28px; font-size:11px; letter-spacing:.1em; color:#999bad; }
+.section { margin:22px 0 14px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.section h2 { font-size:26px; font-weight:550; letter-spacing:-.025em; padding:0; }
+.muted { color:#9699ad; font-size:13px; }
+.status { font-size:11px; letter-spacing:.1em; border:1px solid #343747; border-radius:30px; padding:7px 12px; display:inline-block; }
+.good { color:#9ccdb5; }.warning { color:#d3b77f; }.failed { color:#dc999c; }
+.status.good { border-color:#345345; background:#111f1a; }
+.status.warning { border-color:#5e4c30; background:#201b13; }
+.status.failed { border-color:#603b42; background:#241519; }
+.metric-grid { display:grid; grid-template-columns:repeat(6,1fr); border:1px solid #292b3a; border-radius:12px; margin:20px 0 10px; overflow:hidden; }
+.metric-card { padding:20px 18px; border-right:1px solid #292b3a; background:#10121b; }
+.metric-card:last-child {border:0;}
+.metric-label { color:#a1a4b7; font-size:11px; margin-bottom:10px; }
+.metric-value { color:#f0eff7; font-size:25px; font-variant-numeric:tabular-nums; letter-spacing:-.035em; }
+.stage-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:18px 0; }
+.stage { border:1px solid #292b3a; border-radius:10px; padding:18px; min-height:149px; background:#10121a; }
+.stage.active { border-color:#8c7cc9; box-shadow:inset 0 0 30px #a99bea0b; }
+.stage .stage-top { display:flex; justify-content:space-between; gap:8px; font-size:10px; letter-spacing:.09em; color:#999bad; }
+.stage h3 { font-size:15px; font-weight:550; padding:16px 0 8px; margin:0; }
+.stage p { color:#a0a3b5; font-size:12px; line-height:1.55; margin:0; }
+.line-icon { width:17px; height:17px; vertical-align:middle; margin-right:6px; color:#a99bea; }
+.withheld { border-left:2px solid #b79c69; padding:16px 22px; margin:14px 0; background:#15140f; border-radius:0 8px 8px 0; }
+.withheld strong { color:#d3b77f; font-size:13px; letter-spacing:.1em; }
+.withheld p {color:#b8b3a6;font-size:14px;margin:8px 0 0;}
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius:12px; }
+[data-testid="stImage"] img { border-radius:8px; }
+[data-testid="stButton"] button { border-radius:7px; }
+[data-testid="stExpander"] { border-color:#292b3a; }
+.footer { border-top:1px solid #292b3a; margin-top:30px; padding-top:18px; display:flex; justify-content:space-between; color:#888b9e; font-size:11px; letter-spacing:.06em; }
+@media(max-width:1100px) { .block-container{padding:1.5rem;} .hero h1{font-size:52px;} .metric-grid{grid-template-columns:repeat(3,1fr);} .stage-grid{grid-template-columns:repeat(3,1fr);} }
+@media(max-width:700px) { .hero{min-height:410px;} .hero img{width:100%;opacity:.5;} .hero h1{font-size:44px;} .stage-grid{grid-template-columns:repeat(2,1fr);} .metric-grid{grid-template-columns:repeat(2,1fr);} .nav-note{display:none;} .section{align-items:flex-start;flex-direction:column;} }
