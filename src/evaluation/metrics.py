@@ -7,6 +7,7 @@ never modified. Standard deviations are population values (ddof=0).
 import numpy as np
 
 from src.geometry.registration import transform_points
+from src.spatial.spatial_distribution import distribution_statistics
 
 
 def _real(values: np.ndarray, name: str) -> np.ndarray:
@@ -91,29 +92,7 @@ def spatial_distribution(points: np.ndarray, image_shape: tuple[int, int],
     on this grid, not proof of uniformity, independence or geographic accuracy.
     Empty distributions have undefined entropy; a one-cell grid is rejected.
     """
-    _shape(image_shape)
-    _shape(grid_shape)
-    if np.prod(grid_shape) <= 1:
-        raise ValueError("Entropy requires at least two grid cells")
-    xy = _real(points, "Reference points")
-    if xy.ndim != 2 or xy.shape[1] != 2:
-        raise ValueError("Reference points must be N x 2")
-    if (xy < 0).any() or (xy >= np.array(image_shape[::-1])).any():
-        raise ValueError("Reference points must lie inside the image grid")
-    indices = np.floor(xy/np.array(image_shape[::-1])*np.array(grid_shape[::-1])).astype(int)
-    counts = np.zeros(grid_shape, dtype=int)
-    np.add.at(counts, (indices[:, 1], indices[:, 0]), 1)
-    occupied = counts[counts > 0]
-    probabilities = occupied/len(xy) if len(xy) else np.array([])
-    entropy = float(np.clip(-np.sum(probabilities*np.log(probabilities))/np.log(counts.size), 0, 1)) if len(xy) else None
-    return dict(grid_shape=list(grid_shape), counts=counts.tolist(), occupied_cells=len(occupied),
-                total_cells=counts.size, occupancy_percentage=100*len(occupied)/counts.size,
-                maximum_cell_count=int(counts.max()),
-                minimum_occupied_count=int(occupied.min()) if occupied.size else None,
-                mean_occupied_count=float(occupied.mean()) if occupied.size else None,
-                std_occupied_count=float(occupied.std()) if occupied.size else None,
-                normalized_entropy=entropy,
-                entropy_definition="-sum(p*ln(p))/ln(total cells); grid-scale count concentration, not proof of uniformity")
+    return distribution_statistics(points, image_shape, grid_shape)
 
 
 def coverage_statistics(registered_mask: np.ndarray, reference_mask: np.ndarray) -> dict:
