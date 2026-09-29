@@ -13,11 +13,12 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
-from matplotlib.patches import Circle
+from matplotlib.patches import Circle, Rectangle
 import matplotlib as mpl
 
 from src.evaluation.metrics import reprojection_residuals, spatial_distribution
 from src.geometry.registration import transform_points
+from src.spatial.quadtree import Quadtree
 
 
 def _binary(mask: np.ndarray, shape: tuple) -> np.ndarray:
@@ -324,3 +325,36 @@ def plot_metrics_panel(ax: Axes, metrics: Mapping[str, str],
         ax.text(.98, y, str(value), transform=ax.transAxes, fontsize=11, fontweight="bold",
                 color="#123b51", ha="right", va="center")
     ax.text(.02, .04, footnote, transform=ax.transAxes, fontsize=9, color="#66464a", va="bottom")
+
+
+def plot_quadtree(ax: Axes, reference: np.ndarray, tree: Quadtree,
+                  selected_indices: np.ndarray, reference_mask: np.ndarray | None = None,
+                  title: str = "Quadtree correspondence selection") -> None:
+    """Plot every input, selected points and depth-colored leaf boundaries.
+
+    Selected indices refer to the tree input. Empty leaves remain visible; no
+    coordinates are moved/subsampled. Boundary color denotes depth, not quality.
+    """
+    if np.shape(reference) != tree.image_shape:
+        raise ValueError("Reference dimensions must match the quadtree")
+    selected = np.asarray(selected_indices)
+    if (selected.ndim != 1 or selected.dtype.kind not in 'iu' or
+            (selected < 0).any() or (selected >= len(tree.destination)).any() or
+            len(np.unique(selected)) != len(selected)):
+        raise ValueError("Selected indices must be a unique valid integer vector")
+    plot_image(ax, reference, reference_mask, title)
+    deepest = max(node.depth for node in tree.nodes)
+    norm = Normalize(0, max(deepest, 1))
+    for leaf in tree.leaves:
+        x0, y0, x1, y1 = leaf.bounds
+        ax.add_patch(Rectangle((x0, y0), x1-x0, y1-y0, fill=False,
+            edgecolor=mpl.colormaps['plasma'](norm(leaf.depth)), linewidth=.65, alpha=.85))
+    xy, kept = tree.destination, tree.destination[selected]
+    ax.scatter(xy[:, 0], xy[:, 1], c='#aaaaaa', s=8, alpha=.7, label=f'Input ({len(xy)})')
+    ax.scatter(kept[:, 0], kept[:, 1], c='#00edcf', s=24, edgecolors='#123b51', linewidths=.4,
+               label=f'Selected ({len(selected)})')
+    ax.legend(loc='lower left', fontsize=8)
+    ax.figure.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap='plasma'), ax=ax,
+                       ticks=range(deepest+1), label='Leaf depth', fraction=.035)
+    ax.set_xlim(-.5, tree.image_shape[1]-.5)
+    ax.set_ylim(tree.image_shape[0]-.5, -.5)

@@ -119,6 +119,40 @@ def _scores(values: np.ndarray | None, length: int, name: str) -> np.ndarray | N
     return array.astype(float, copy=True)
 
 
+def _select_partition_indices(group_ids: np.ndarray, max_per_region: int,
+                              max_matches: int | None, conf: np.ndarray | None,
+                              errors: np.ndarray | None) -> np.ndarray:
+    """Shared ranked round-robin allocator for validated grid/leaf memberships.
+
+    Regions are visited by ascending ID; output is returned in input order.
+    Callers validate scores and memberships. Zero budgets select nothing.
+    """
+    for name, value in (("max_per_region", max_per_region), ("max_matches", max_matches)):
+        if value is None and name == "max_matches":
+            continue
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < 0:
+            raise ValueError(f"{name} must be a nonnegative integer")
+    keys = [np.arange(len(group_ids))]
+    if conf is not None:
+        keys.append(-conf)
+    if errors is not None:
+        keys.append(errors)
+    ranking = np.lexsort(tuple(keys))
+    queues = [ranking[group_ids[ranking] == cell][:max_per_region]
+              for cell in np.unique(group_ids)]
+    limit = len(group_ids) if max_matches is None else max_matches
+    chosen = []
+    for level in range(max((len(queue) for queue in queues), default=0)):
+        for queue in queues:
+            if len(chosen) >= limit:
+                break
+            if level < len(queue):
+                chosen.append(int(queue[level]))
+        if len(chosen) >= limit:
+            break
+    return np.sort(np.asarray(chosen, dtype=int))
+
+
 def select_spatially_balanced_matches(
     source: np.ndarray, destination: np.ndarray, image_shape: tuple[int, int],
     grid_shape: tuple[int, int] = (4, 4), max_per_cell: int = 10,
@@ -154,26 +188,7 @@ def select_spatially_balanced_matches(
         assign_grid_cells(a, source_shape)
     conf = _scores(confidence, len(a), "Confidence")
     errors = _scores(residuals, len(a), "Residuals")
-    indices = np.arange(len(a))
-    keys = [indices]
-    if conf is not None:
-        keys.append(-conf)
-    if errors is not None:
-        keys.append(errors)
-    ranking = np.lexsort(tuple(keys))
-    queues = [ranking[assignment.cells[ranking] == cell][:max_per_cell]
-              for cell in np.unique(assignment.cells)]
-    limit = len(a) if max_matches is None else max_matches
-    chosen = []
-    for level in range(max((len(queue) for queue in queues), default=0)):
-        for queue in queues:
-            if len(chosen) >= limit:
-                break
-            if level < len(queue):
-                chosen.append(int(queue[level]))
-        if len(chosen) >= limit:
-            break
-    selected = np.sort(np.asarray(chosen, dtype=int))
+    selected = _select_partition_indices(assignment.cells, max_per_cell, max_matches, conf, errors)
     return SpatialSelection(a[selected], b[selected], selected,
         assignment.rows[selected], assignment.columns[selected], assignment.cells[selected],
         conf[selected] if conf is not None else None, errors[selected] if errors is not None else None)
