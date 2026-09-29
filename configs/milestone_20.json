@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "experiments": [
+    {"name": "TMC saved LoFTR", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "TMC-WAC / saved LoFTR"},
+    {"name": "TMC intensity", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "TMC-WAC / intensity"},
+    {"name": "TMC phase", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "TMC-WAC / phase_congruency"},
+    {"name": "OHRC saved intensity", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "OHRC-WAC / saved intensity"},
+    {"name": "OHRC saved phase", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "OHRC-WAC / saved phase_congruency"},
+    {"name": "IIRS single intensity", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "IIRS single_band-WAC / intensity"},
+    {"name": "IIRS single phase", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "IIRS single_band-WAC / phase_congruency"},
+    {"name": "IIRS mean intensity", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "IIRS band_mean-WAC / intensity"},
+    {"name": "IIRS mean phase", "mode": "import", "report_path": "results/milestone_18_cross_modal/cross_modal.json", "experiment_name": "IIRS band_mean-WAC / phase_congruency"}
+  ]
+}
