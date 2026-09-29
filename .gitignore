@@ -6,9 +6,10 @@ __pycache__/
 *.py[cod]
 
 # Chandrayaan / experimental datasets
-data/raw/
-data/test/
-data/processed/
+data/
+
+# Model weights
+models/
 
 # Generated experiment results
 results/
