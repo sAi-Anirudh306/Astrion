@@ -22,6 +22,59 @@ def signed_longitude(longitude: float) -> float:
     return float((longitude + 180) % 360 - 180)
 
 
+def extract_geolocated_wac(wac_path: str | Path, geographic_points: np.ndarray,
+                           output_path: str | Path) -> dict:
+    """Extract a covered bounding window using supplied lon/lat controls.
+
+    Uses all supplied control/boundary points, never substitutes TMC corners.
+    One raster pixel of padding; full footprint must lie inside the raster and
+    visible lunar orthographic domain. Values, nodata, CRS and mask preserved.
+    """
+    from src.geometry.georeferencing import project_coordinates, lunar_geographic_crs
+    path = Path(output_path)
+    if path.exists():
+        raise FileExistsError(path)
+    points = np.asarray(geographic_points, float)
+    if points.ndim != 2 or points.shape[1] != 2 or not len(points) or not np.isfinite(points).all():
+        raise ValueError('Expected finite Nx2 geolocation controls')
+    with rasterio.open(wac_path) as source:
+        lunar_geographic_crs(source.crs)
+        projected = project_coordinates(points, source.crs)
+        if not np.isfinite(projected).all():
+            raise ValueError('Geolocation outside visible WAC projection')
+        inverse = ~source.transform
+        xy = np.array([inverse @ tuple(p) for p in projected])
+        lo, hi = np.floor(xy.min(0)).astype(int)-1, np.ceil(xy.max(0)).astype(int)+1
+        if np.any(lo < 0) or np.any(hi > [source.width, source.height]):
+            raise ValueError('Complete OHRC footprint not covered by WAC bounds')
+        window = Window(int(lo[0]), int(lo[1]), int(hi[0]-lo[0]), int(hi[1]-lo[1]))
+        data, mask = source.read(1, window=window), source.read_masks(1, window=window)
+        if not (mask > 0).any():
+            raise ValueError('WAC crop has no valid reference pixels')
+        profile = source.profile.copy()
+        profile.update(width=data.shape[1], height=data.shape[0], transform=source.window_transform(window))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+            with rasterio.open(path, 'w', **profile) as target:
+                target.write(data, 1)
+                target.write_mask(mask)
+        left, bottom, right, top = bounds(window, source.transform)
+        lon, lat = transform(source.crs, lunar_geographic_crs(source.crs),
+                             [left, right, right, left], [bottom, bottom, top, top])
+        result = dict(covered=True, source_path=str(wac_path), output_path=str(path),
+            source_shape=list(source.shape), source_bounds=list(source.bounds),
+            input_geographic_bounds=[*points.min(0), *points.max(0)],
+            geographic_bounds=[min(lon), min(lat), max(lon), max(lat)],
+            projected_bounds=[left, bottom, right, top],
+            transform=list(profile['transform']), crs=source.crs.to_wkt(), resolution=list(source.res),
+            nodata=source.nodata, shape=list(data.shape), valid_pixels=int((mask > 0).sum()),
+            window=dict(column_start=int(lo[0]), row_start=int(lo[1]), column_stop=int(hi[0]), row_stop=int(hi[1])))
+    with rasterio.open(path) as saved:
+        np.testing.assert_array_equal(saved.read(1), data)
+        np.testing.assert_array_equal(saved.read_masks(1), mask)
+    return result
+
+
 def extract_wac_region(label_path: str | Path, wac_path: str | Path,
                        start_row: int, stop_row: int, output_directory: str | Path) -> dict[str, Any]:
     """Extract a bounding raster window, without resampling or polygon masking.
