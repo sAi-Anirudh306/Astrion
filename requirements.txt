@@ -1,0 +1,8 @@
+# Core scientific pipeline, packaging and unittest suite (Python 3.11.9).
+# Versions from the validated environment; no environment rebuild is required.
+numpy==2.4.6
+scipy==1.17.1
+opencv-contrib-python==5.0.0.93
+rasterio==1.4.4
+matplotlib==3.11.2
+Pillow==12.3.0

@@ -11,7 +11,7 @@ except ImportError:
 from PIL import Image, UnidentifiedImageError
 
 from src.ui.service import (DEMOS, Artifact, Demo, artifacts, build_stages, discover_demos,
-                            downloads, format_metric, load_results, metric_cards,
+                            downloads, final_product, format_metric, load_results, metric_cards,
                             registration_allowed, reliability, safe_path, supporting_metadata)
 
 ROOT = Path(__file__).resolve().parent
@@ -36,6 +36,45 @@ def show_artifact(artifact: Artifact, *, width: int = 1500) -> None:
         st.image(data, caption=artifact.origin, width="stretch")
     except (OSError, ValueError, UnidentifiedImageError):
         st.caption("This optional visualization is unavailable. Recorded metrics remain accessible.")
+
+
+@st.cache_data(max_entries=4, show_spinner=False)
+def registered_preview(path: str, modified: int) -> bytes:
+    """Render the actual masked scientific GeoTIFF without changing its pixels."""
+    del modified
+    import numpy as np
+    import rasterio
+    from src.evaluation.visualization import display_image as scientific_display
+    with rasterio.open(path) as dataset:
+        if dataset.count != 1 or dataset.width * dataset.height > 1_000_000:
+            raise ValueError("Expected a small prepared single-band registered product")
+        values = scientific_display(dataset.read(1), dataset.read_masks(1) > 0)
+    pixels = np.asarray(np.ma.filled(values, 0) * 255, dtype=np.uint8)
+    output = BytesIO()
+    Image.fromarray(pixels).convert("RGB").save(output, format="WEBP", quality=88)
+    return output.getvalue()
+
+
+def final_products(result: dict, *, expand_registered: bool = True) -> None:
+    """Expose real correspondence exports and the reliability-gated final raster."""
+    st.caption("Validated final package · results/final")
+    for key, title in (("match_points", "Download corresponding match points (CSV)"),
+                       ("verified_inlier_points", "Download verified inliers (CSV)")):
+        path = final_product(ROOT, result, key)
+        if path is not None and path.is_file():
+            st.download_button(title, path.read_bytes(), path.name, "text/csv", key=key)
+    if registration_allowed(result):
+        path = final_product(ROOT, result, "registered_product")
+        if path is not None and path.is_file():
+            panel = (st.expander("Registered scientific product · float32 GeoTIFF")
+                     if expand_registered else st.container())
+            with panel:
+                try:
+                    st.image(registered_preview(str(path), path.stat().st_mtime_ns),
+                             caption="Display normalization of the actual final registered raster", width="stretch")
+                    st.download_button("Download registered GeoTIFF", path.read_bytes(), path.name, "image/tiff")
+                except (OSError, ValueError):
+                    st.caption("Registered product preview unavailable.")
 
 
 def html(value: str) -> None:
@@ -191,6 +230,8 @@ def watch_pipeline(demo: Demo, result: dict, images: tuple[Artifact, ...]) -> No
             path = run.directory / "registered_product.npz"
             if path.is_file():
                 st.download_button("Download registered crop + mask + transform", path.read_bytes(), "registered_product.npz", "application/octet-stream")
+        if selected == 11:
+            final_products(result, expand_registered=False)
         st.caption("Fitted residuals are not geographic ground truth. Three-point fits lack redundancy. Scale normalization and Phase Congruency do not guarantee modality invariance; pretrained LoFTR has domain shift. LRO WAC is an external reference.")
 
 
@@ -247,7 +288,7 @@ def main() -> None:
         demos = discover_demos(ROOT)
         records = load_results(ROOT)
     except (OSError, ValueError) as exc:
-        st.error("Prepared experiment records are unavailable. Restore the M20 results to open the demo.")
+        st.error("Prepared experiment records are unavailable. Restore results/final to open the demo.")
         with st.expander("Technical diagnostics"):
             st.text(str(exc))
         education()
@@ -269,6 +310,7 @@ def main() -> None:
     else:
         result_summary(result)
         workspace(demo, images)
+        final_products(result)
     if mode != "Watch Pipeline":
         quick_details(demo, result, images)
     html('<div class="footer"><span>ASTRION / LunarMatch</span><span>SIH26166 · Research demonstration · No endorsement implied</span></div>')
@@ -288,7 +330,7 @@ def quick_details(demo: Demo, result: dict, images: tuple[Artifact, ...]) -> Non
         st.write("This presentation supports prepared demo results. Custom execution is not enabled.")
         st.caption("Scientific processing requires a supported sensor product, matching metadata, valid-pixel masks, physical sampling information and an appropriate reference. Arbitrary image uploads cannot supply those requirements.")
     education()
-    section("Take the evidence with you", "ORIGINAL M20 REPORTS / ALL NINE EXPERIMENTS")
+    section("Take the evidence with you", "VALIDATED FINAL REPORTS / ALL NINE EXPERIMENTS")
     for col, (title, (name, payload, mime)) in zip(st.columns(3), downloads(ROOT).items()):
         col.download_button(title, payload, name, mime, width="stretch")
 

@@ -15,14 +15,21 @@ dependency is absent, install it into the existing environment:
 
 ## Scope and architecture
 
-This is a presentation task after checkpoint `0e4e74e`, not Milestone 21.
+The UI originated after checkpoint `0e4e74e`; the submission cleanup connects
+its final presentation to the validated M21 package.
 `app.py` renders Streamlit controls and figures. `src/ui/service.py` reads the
-M20 version-1 result contract and links explicitly selected historical artifacts.
-M20 records already preserve M18 metrics, reliability policy, parameters,
+final package's version-1 result contract and packaged figures/exports.
+Final records preserve M18/M20 metrics, reliability policy, parameters,
 provenance and orchestration events. Quick Result reads those records. Watch
 Pipeline uses the M20 import runner and a prepared-data controller in
 `src/ui/pipeline.py`; it never performs new matching or learned inference.
 Scientific modules and historical results are unchanged.
+
+Quick Result and the last Watch Pipeline stage expose corresponding-point CSVs.
+The reliable TMC case also exposes verified-inlier CSVs and the actual float32
+registered GeoTIFF, with a separate normalized display preview. Negative cases
+do not expose registration downloads. Missing final records do not fall back
+to M20 metrics. The complete final package remains unchanged on disk.
 
 The interface uses dark neutral surfaces, small violet accents, restrained
 semantic status indicators, compact metric cards and a selectable pipeline
@@ -33,7 +40,7 @@ No raw strips, IIRS cube or neural model are loaded on startup.
 
 ## Demonstration
 
-The default case is **TMC-2 ↔ WAC / TMC saved LoFTR**. M20 is the metric source
+The default case is **TMC-2 ↔ WAC / TMC saved LoFTR**. `results/final` is the metric source
 of truth. Its saved decision is RELIABLE. OHRC saved intensity and IIRS mean
 intensity are INSUFFICIENT SUPPORT; registration is withheld, even when a
 minimal affine fit exists.
@@ -63,7 +70,7 @@ and `warp_affine` functions perform actual lightweight operations. The TMC crop
 is already on a 100 m grid, so scale normalization truthfully produces an
 unchanged grid. Registration uses the recorded reliable affine without refitting.
 The registered scientific float32 crop, validity mask and transform are available
-as an NPZ download. Saved M20 metrics remain the scientific source of truth.
+as an NPZ download. Saved final-package metrics remain the scientific source of truth.
 
 The newly computed preprocessing demonstration is **not** the historical LoFTR
 intermediate: that experiment normalized native imagery before map sampling.
@@ -100,7 +107,7 @@ Observation details contain two source/reference cards. IIRS metadata includes
 the 256-band RAW DN product, recorded wavelength range, and predetermined M17
 single-band and band-mean definitions with explicit index conventions.
 Advanced parameters, provenance, educational explanations and scientific
-limitations are expandable. Downloads serve the original M20 JSON, text summary
+limitations are expandable. Downloads serve the final-package JSON, text summary
 and comparison CSV covering all nine experiments.
 
 Custom execution/upload is intentionally unavailable in this presentation.
@@ -112,10 +119,11 @@ selection that silently changes a historical experiment.
 
 The demo needs the prepared local `results/` directories, which are ignored by
 Git. Cloning code alone does not supply scientific results. The main required
-file is `results/milestone_20_experiments/experiments.json`; linked figures live
-in M8/M10/M16/M17 and `experiment_tycho_map_projected` directories.
+file is `results/final/experiments.json`; final figures and exported products live
+inside that package. Watch Pipeline still uses M8/M16/M17/M18 evidence and the
+prepared scientific TMC crops for its intermediate stages.
 Missing optional figures are omitted; corrupt/unreadable images produce a
-compact fallback. Missing/invalid M20 records produce a friendly error with
+compact fallback. Missing/invalid final records produce a friendly error with
 expandable diagnostics. The UI exposes only its fixed supported catalog.
 
 TMC and OHRC historical runtime values measure saved-support replay, not full

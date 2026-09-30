@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-AVAILABLE = importlib.util.find_spec("streamlit") is not None and (ROOT / "results/milestone_20_experiments/experiments.json").exists()
+AVAILABLE = importlib.util.find_spec("streamlit") is not None and (ROOT / "results/final/experiments.json").exists()
 
 
 @unittest.skipUnless(AVAILABLE, "Optional UI dependency or prepared results unavailable")
@@ -23,6 +23,16 @@ class UIAppTests(unittest.TestCase):
         self.assertIn("569", markup)
         self.assertTrue(app.get("image"))
         self.assertIn("Checkerboard", app.selectbox[0].options)
+
+    def test_final_product_exports_respect_reliability(self):
+        app = self.app()
+        for case in ("tmc", "ohrc", "iirs"):
+            app.button_group(key="demo").set_value(case).run()
+            self.assertFalse(app.exception)
+            labels = [button.label for button in app.get("download_button")]
+            self.assertIn("Download corresponding match points (CSV)", labels)
+            self.assertEqual("Download registered GeoTIFF" in labels, case == "tmc")
+            self.assertEqual("Download verified inliers (CSV)" in labels, case == "tmc")
 
     def test_all_cases_both_modes(self):
         app = self.app()

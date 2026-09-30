@@ -25,7 +25,7 @@ To reproduce packaging, choose a **new** output directory. Existing packages
 and historical results are never overwritten:
 
 ```powershell
-.venv\Scripts\python.exe scripts/final_validation.py --build --output results/final_reproduction
+.venv\Scripts\python.exe scripts/final_validation.py --build --output results/final_reproduction --compare-to results/final
 ```
 
 This imports all nine experiments, exports recorded points, copies the scientific
@@ -38,14 +38,15 @@ The full-suite completion command is:
 .venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
-The UI remains on its validated M20 contract, which the final validator checks
-against every final record. Quick Result and Watch Pipeline are unchanged:
+The UI now reads final records, figures and exports from `results/final`.
+Watch Pipeline retains its M20 import and prepared-stage evidence, checked
+against the selected final record. Scientific behavior is unchanged:
 
 ```powershell
 .venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-Completion validation: all **20 focused M21 tests passed in 36.641 s**.
+Original M21 completion validation: all **20 focused M21 tests passed in 36.641 s**.
 The full suite was run once after implementation: **447 tests passed in
 56.307 s**, with no failures or skips. Existing Rasterio deprecation notices and
 Streamlit AppTest context notices were non-fatal.
@@ -57,6 +58,15 @@ candidate/inlier, registered comparison, overlay, checkerboard and metric views;
 both negative cases retained withheld registration at final output. This was
 an interaction smoke check, not browser pixel validation. Its receipt is
 `results/m21_completion/ui_smoke.json`.
+
+Cleanup extends the existing builder with `prepared_inputs.json`, an exact
+source/window/GSD/evidence inventory, and `--compare-to` for scientific and
+artifact comparison. Original M21 packages remain valid without this additive
+manifest. Package timestamps, execution IDs, import durations, protection
+inventory and manifest/ZIP hashes may differ. Scientific records, historical
+runtime and exported artifacts must agree exactly. The original `results/final`
+and an additional `results/final_m21_preserved` copy are preserved.
+See `REPOSITORY_CLEANUP.md` for the subsequent cleanup completion checks.
 
 ## Package guide
 

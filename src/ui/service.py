@@ -1,4 +1,4 @@
-"""Read-only presentation adapter for prepared M20 records and historical figures.
+"""Read-only presentation of the authoritative final package and stage evidence.
 
 This module deliberately imports no scientific execution modules. The catalog
 binds named experiments to known artifacts, never to arbitrary uploaded paths.
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-REPORT = "results/milestone_20_experiments/experiments.json"
+REPORT = "results/final/experiments.json"
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ def load_results(root: Path) -> dict[str, dict]:
     """Validate the presentation contract without re-assessing scientific gates."""
     report = read_json(root, REPORT)
     if report.get("schema_version") != 1 or not isinstance(report.get("experiments"), list):
-        raise ValueError("Expected a version-1 M20 experiments report")
+        raise ValueError("Expected a version-1 final experiments report")
     records = {}
     for result in report["experiments"]:
         if not isinstance(result, dict) or not isinstance(result.get("name"), str):
@@ -152,7 +152,39 @@ def registration_allowed(result: dict) -> bool:
     return result.get("status") == "RELIABLE" and result["metrics"].get("transform_available") is True
 
 
+def final_product(root: Path, result: dict, key: str) -> Path | None:
+    """Resolve an exported product only within the final package."""
+    item = result.get("final_artifacts", {}).get(key)
+    if item is None:
+        return None
+    return safe_path(root, "results/final/" + item["path"], area="results/final")
+
+
 def artifacts(root: Path, demo: Demo, result: dict) -> tuple[Artifact, ...]:
+    """Use packaged final figures; historical lookup is only for unpackaged records."""
+    if result.get("name") != demo.experiment:
+        raise ValueError("Demo/result association mismatch")
+    if "final_artifacts" not in result:
+        return historical_artifacts(root, demo, result)
+    titles = {
+        "source": "Source", "reference": "Reference",
+        "candidate_matches": "Candidate matches", "candidate_coordinates": "Candidate coordinates",
+        "verified_inliers": "Verified inliers", "spatial_distribution": "Spatial distribution",
+        "residuals": "Residuals", "before_after": "Before / after", "overlay": "Overlay",
+        "checkerboard": "Checkerboard", "preprocessed_scaled": "Preprocessed / scaled",
+        "features_(prior_preparation)": "Features (prior preparation)", "spectrum": "Spectrum",
+    }
+    found = []
+    for key, title in titles.items():
+        if key in {"before_after", "overlay", "checkerboard"} and not registration_allowed(result):
+            continue
+        path = final_product(root, result, key)
+        if path is not None and path.is_file():
+            found.append(Artifact(title, path, result["final_artifacts"][key]["origin"]))
+    return tuple(found)
+
+
+def historical_artifacts(root: Path, demo: Demo, result: dict) -> tuple[Artifact, ...]:
     """Explicit figure associations prevent mixing similar experiments.
 
 M17 figures describe prior preparation, not the new M18 correspondence run.
@@ -242,8 +274,8 @@ def build_stages(result: dict, available: tuple[Artifact, ...]) -> tuple[Stage, 
 
 def supporting_metadata(root: Path, demo: Demo) -> dict:
     """Small prior receipts only; missing optional metadata is harmless."""
-    relative = {"iirs": "results/milestone_17_iirs/iirs.json",
-                "ohrc": "results/milestone_16_ohrc/ohrc.json"}.get(demo.key)
+    relative = {"iirs": "results/final/evidence/iirs_preparation.json",
+                "ohrc": "results/final/evidence/ohrc_preparation.json"}.get(demo.key)
     if relative is None:
         return {}
     try:
@@ -264,9 +296,9 @@ def downloads(root: Path) -> dict[str, tuple[str, bytes, str]]:
     """Serve existing compact reports without changing or bundling raw data."""
     found = {}
     for title, filename, mime in (("Experiment JSON", "experiments.json", "application/json"),
-                                  ("Human summary", "experiments_summary.txt", "text/plain"),
+                                  ("Human summary", "summary.txt", "text/plain"),
                                   ("Comparison CSV", "comparison.csv", "text/csv")):
-        path = safe_path(root, "results/milestone_20_experiments/" + filename)
+        path = safe_path(root, "results/final/" + filename, area="results/final")
         if path.is_file() and path.stat().st_size <= 8_000_000:
             found[title] = (filename, path.read_bytes(), mime)
     return found

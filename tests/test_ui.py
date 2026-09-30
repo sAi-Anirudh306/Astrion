@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from src.ui.service import (DEMOS, REPORT, artifacts, build_stages, discover_demos,
-                            downloads, format_metric, load_results, metric_cards,
+                            downloads, final_product, format_metric, load_results, metric_cards,
                             registration_allowed, reliability, safe_path)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +49,29 @@ class UIServiceTests(unittest.TestCase):
         self.report.unlink()
         with self.assertRaises(FileNotFoundError):
             load_results(self.root)
+
+    def test_final_metrics_win_over_conflicting_historical_report(self):
+        old = self.root / "results/milestone_20_experiments/experiments.json"
+        old.parent.mkdir(parents=True)
+        obsolete = record()
+        obsolete["metrics"]["candidate_matches"] = 999
+        old.write_text(json.dumps({"schema_version": 1, "experiments": [obsolete]}))
+        self.assertEqual(load_results(self.root)[DEMOS[0].experiment]["metrics"]["candidate_matches"], 20)
+        self.report.unlink()
+        with self.assertRaises(FileNotFoundError):
+            load_results(self.root)
+
+    def test_final_product_cannot_escape_package(self):
+        result = record()
+        result["final_artifacts"] = {"match_points": {"path": "../historical.csv"}}
+        with self.assertRaises(ValueError):
+            final_product(self.root, result, "match_points")
+
+    def test_packaged_missing_figures_do_not_fall_back_to_history(self):
+        result = record()
+        result["final_artifacts"] = {}
+        with patch("src.ui.service.historical_artifacts", side_effect=AssertionError("Historical fallback")):
+            self.assertEqual(artifacts(self.root, DEMOS[0], result), ())
 
     def test_invalid_json(self):
         self.report.write_text("not JSON", encoding="utf-8")
@@ -149,6 +172,15 @@ class UIServiceTests(unittest.TestCase):
 
 @unittest.skipUnless((ROOT / REPORT).exists(), "Prepared local demo artifacts unavailable")
 class PreparedDemoTests(unittest.TestCase):
+    def test_final_figures_and_exports_are_package_local(self):
+        for demo in DEMOS:
+            result = load_results(ROOT)[demo.experiment]
+            for artifact in artifacts(ROOT, demo, result):
+                self.assertTrue(artifact.path.is_relative_to(ROOT / "results/final"))
+            self.assertTrue(final_product(ROOT, result, "match_points").is_file())
+        report = downloads(ROOT)["Experiment JSON"][1]
+        self.assertEqual(report, (ROOT / REPORT).read_bytes())
+
     def test_three_real_cases(self):
         records = load_results(ROOT)
         self.assertEqual(discover_demos(ROOT), DEMOS)

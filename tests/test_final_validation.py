@@ -13,7 +13,7 @@ import numpy as np
 from src.evaluation.experiments import write_json
 from src.evaluation.final_package import (build_package, comparison, create_manifest, digest,
     export_zip, point_rows, resolve, strict_json, check_protected)
-from src.evaluation.final_validation import validate_package, validate_metrics, read_points
+from src.evaluation.final_validation import compare_packages, validate_package, validate_metrics, read_points
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARED = (ROOT / "results/milestone_20_experiments/experiments.json").is_file()
@@ -97,6 +97,35 @@ class FinalPackageTests(unittest.TestCase):
         names = {c["name"] for c in strict_json(ROOT / "configs/milestone_20.json")["experiments"]}
         self.assertEqual({r["name"] for r in self.records}, names)
         self.assertTrue(all(r["evidence_mode"] == "imported_historical_evidence" for r in self.records))
+
+    def test_clean_reproduction_matches_authoritative_science(self):
+        report = compare_packages(ROOT / "results/final", self.package)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(report["experiment_count"], len(self.records))
+        self.assertEqual(report["artifacts_byte_identical"], sum(len(r["final_artifacts"]) for r in self.records))
+
+    def test_prepared_inputs_preserve_exact_regions_and_bands(self):
+        inputs = strict_json(self.package / "prepared_inputs.json")
+        pairs = {p["sensor"]: p for p in inputs["pairs"]}
+        self.assertEqual(pairs["TMC"]["source_window"]["row_start"], 115734)
+        self.assertEqual(pairs["OHRC"]["source_window"]["row_start"], 40978)
+        self.assertEqual(pairs["IIRS"]["source_window"]["rows"], [12571, 13083])
+        self.assertEqual([r["band_indices"] for r in pairs["IIRS"]["spectral_reductions"]], [[17], list(range(12, 24))])
+        for pair in pairs.values():
+            for item in pair["inputs"]:
+                self.assertTrue((ROOT / item["path"]).is_file())
+                if item["sha256"]:
+                    self.assertEqual(digest(ROOT / item["path"]), item["sha256"])
+
+    def test_prepared_input_tampering_rejected_before_seal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "package"
+            shutil.copytree(self.package, target)
+            inputs = strict_json(target / "prepared_inputs.json")
+            inputs["pairs"][0]["inputs"][0]["size"] += 1
+            (target / "prepared_inputs.json").write_text(json.dumps(inputs), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Protected file changed"):
+                validate_package(target, root=ROOT, sealed=False)
 
     def test_standard_records_and_strict_json(self):
         for r in self.records:

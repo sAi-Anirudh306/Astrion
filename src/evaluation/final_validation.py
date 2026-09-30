@@ -118,6 +118,41 @@ def validate_headline(package: Path, record: dict) -> dict:
         "RMSE", "INLIER MATCH COUNT", "INLIER RATIO", "SPATIAL COVERAGE", "RELIABILITY STATUS", "PROVENANCE")}
 
 
+def compare_packages(baseline: Path, reproduced: Path) -> dict:
+    """Compare scientific records and exported products, excluding run bookkeeping.
+
+    Validate both sealed packages first. Exact byte comparisons cover the saved
+    rasters, coordinates and figures; no numerical tolerance hides changed evidence.
+    """
+    validate_package(baseline)
+    validate_package(reproduced)
+    old = {r["name"]: r for r in strict_json(baseline / "experiments.json")["experiments"]}
+    new = {r["name"]: r for r in strict_json(reproduced / "experiments.json")["experiments"]}
+    require(old.keys() == new.keys(), "Reproduction experiment matrix changed")
+    stable = ("experiment_id", "configuration", "status", "reliability", "metrics", "parameters",
+              "metadata", "registration_status", "coordinate_frame", "evidence_mode")
+    compared = 0
+    for name, before in old.items():
+        after = new[name]
+        for field in stable:
+            require(before[field] == after[field], f"Reproduction changed {name}: {field}")
+        require(before["timing"]["historical_seconds"] == after["timing"]["historical_seconds"],
+                f"Historical runtime changed: {name}")
+        require(before["final_artifacts"].keys() == after["final_artifacts"].keys(), f"Artifact set changed: {name}")
+        for key, artifact in before["final_artifacts"].items():
+            require(digest(resolve(baseline, artifact["path"])) ==
+                    digest(resolve(reproduced, after["final_artifacts"][key]["path"])),
+                    f"Reproduction artifact changed: {name}/{key}")
+            compared += 1
+    require((baseline / "comparison.csv").read_bytes() == (reproduced / "comparison.csv").read_bytes(),
+            "Reproduction comparison CSV changed")
+    return dict(status="PASS", experiment_count=len(old), artifacts_byte_identical=compared,
+                baseline=str(baseline), reproduced=str(reproduced),
+                expected_differences=["Execution/run IDs and timestamps", "Import/event/packaging durations",
+                    "Repository revision and absolute provenance paths", "Protection inventory of existing local files",
+                    "Added prepared-input manifest", "Manifest and ZIP hashes reflecting those changes"])
+
+
 def validate_package(package: Path, *, root: Path | None = None, sealed: bool = True) -> dict:
     """Fail closed on inconsistent evidence. root additionally audits protected originals."""
     package = package.resolve()
@@ -135,6 +170,14 @@ def validate_package(package: Path, *, root: Path | None = None, sealed: bool = 
     if root:
         require(strict_json(root / "configs/milestone_20.json") == strict_json(package / "run_config.json"), "Configuration differs from authoritative M20")
         check_protected(root, strict_json(package / "protection.json")["files"])
+    if (package / "prepared_inputs.json").is_file():
+        inputs = strict_json(package / "prepared_inputs.json")
+        require(inputs["schema_version"] == 1 and
+                {p["sensor"] for p in inputs["pairs"]} == {r["parameters"]["config"]["source_sensor"] for r in records},
+                "Prepared-input sensor inventory differs")
+        identities = inputs["evidence"] + [i for p in inputs["pairs"] for i in p["inputs"]]
+        if root:
+            check_protected(root, {i["path"]: i for i in identities})
     for r in records:
         validate_metrics(r)
         require(r == strict_json(resolve(package, r["record_path"])), "Per-experiment record disagreement")

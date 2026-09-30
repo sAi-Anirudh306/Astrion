@@ -16,7 +16,7 @@ import zipfile
 import numpy as np
 
 from src.evaluation.experiments import ExperimentRunner, load_configs, write_json, json_safe
-from src.ui.service import DEMOS, artifacts
+from src.ui.service import DEMOS, historical_artifacts
 
 LIMITATIONS = [
     "Fitted residual RMSE is not absolute geographic accuracy or ground-truth positional error.",
@@ -209,7 +209,7 @@ def package_experiment(root: Path, output: Path, result: dict) -> dict:
     link("candidate_coordinates", folder / "candidate_coordinates.png", "Regenerated plot of saved coordinates")
     demo = next((d for d in DEMOS if d.experiment == r["name"]), None)
     if demo:
-        for artifact in artifacts(root, demo, r):
+        for artifact in historical_artifacts(root, demo, r):
             key = artifact.title.lower().replace(" / ", "_").replace(" ", "_")
             copy(key, artifact.path, key + artifact.path.suffix, artifact.origin)
     if r["status"] == "RELIABLE":
@@ -268,6 +268,89 @@ def export_zip(output: Path) -> None:
                 archive.writestr(info, path.read_bytes())
 
 
+def prepared_inputs(root: Path, records: list[dict]) -> dict:
+    """Describe the exact prepared inputs and original lineage without recropping.
+
+    Historical OHRC/IIRS source arrays were not persisted. Their preparation
+    receipts and saved M18 evidence are explicit inputs, never reconstructed
+    from display images. Large originals are inventoried without rereading them.
+    """
+    root = root.resolve()
+
+    def identity(value: str | Path, role: str) -> dict:
+        # Historical receipts contain workstation-absolute paths. Rebase only
+        # known repository data/results suffixes, not arbitrary external paths.
+        parts = str(value).replace("\\", "/").split("/")
+        start = next((i for i, part in enumerate(parts) if part in {"data", "results", "configs"}), None)
+        if start is None:
+            raise ValueError(f"Unrecognized prepared input path: {value}")
+        relative = Path(*parts[start:])
+        path = resolve(root, relative.as_posix())
+        stat = path.stat()
+        small = stat.st_size <= 8_000_000
+        return dict(path=relative.as_posix(), role=role, size=stat.st_size,
+                    sha256=digest(path) if small else None,
+                    mtime_ns=stat.st_mtime_ns,
+                    assurance="SHA256" if small else "Size/mtime; large original or intermediate not rehashed")
+
+    def receipt(relative: str) -> dict:
+        return json.loads((root / relative).read_text(encoding="utf-8"))
+
+    tmc_path = "data/processed/tycho/ch2_tmc_nrf_20211122T2123225722_d_img_d18_lat_-44_-42.6.json"
+    map_path = "data/processed/tycho/map_projected/tmc_on_wac_grid_metadata.json"
+    ref_path = "data/processed/tycho/common_reference/wac_tmc_rows_115734_124259.json"
+    tmc, mapping, reference = receipt(tmc_path), receipt(map_path), receipt(ref_path)
+    groups = [dict(sensor="TMC", source_product=tmc["source_metadata"]["logical_identifier"],
+        source_window=tmc["source_metadata"]["subset"], reference_window=reference["window"],
+        native_gsd_m=tmc["source_metadata"]["pixel_resolution_m_per_pixel"],
+        prepared_gsd_m=mapping["resolution"], reference_gsd_m=reference["resolution"],
+        processing=mapping["processing_policy"],
+        inputs=[identity(value, role) for value, role in (
+            (tmc["source_image"], "original sensor product"), (tmc["source_label"], "original PDS4 label"),
+            (reference["wac_source"], "original LRO reference"),
+            (tmc["outputs"]["scientific"], "historical native scientific crop"),
+            ("data/processed/tycho/map_projected/tmc_on_wac_grid.tif", "prepared scientific input"),
+            (reference["output_tif"], "prepared WAC input"),
+            (tmc_path, "crop provenance"), (map_path, "mapping provenance"), (ref_path, "reference provenance"))])]
+    for sensor, relative, paths_key, selection_key, reference_key in (
+            ("OHRC", "results/milestone_16_ohrc/ohrc.json", "paths", "selected_crop", "reference_crop"),
+            ("IIRS", "results/milestone_17_iirs/iirs.json", "source_paths", "selected_region", "reference")):
+        prior = receipt(relative)
+        ref = prior[reference_key]
+        selection = prior[selection_key]
+        window = selection["subset"] if sensor == "OHRC" else selection
+        group = dict(sensor=sensor,
+            source_product=prior["product_stem"] if sensor == "OHRC" else prior["product"]["product_id"],
+            source_window=window, reference_window=ref["window"],
+            native_gsd_m=(prior["metadata"]["pixel_resolution_m_per_pixel"] if sensor == "OHRC"
+                          else prior["product"]["native_gsd_m"]), reference_gsd_m=ref["resolution"],
+            processing="Saved M16/M17 preparation and M18 correspondence evidence; no new scientific execution",
+            source_array_policy="Native prepared source arrays were not persisted; display PNGs are not scientific inputs",
+            inputs=[identity(value, "original " + key) for key, value in prior[paths_key].items()]
+                + [identity(ref["source_path"], "original LRO reference"),
+                   identity(ref["output_path"], "prepared WAC input"), identity(relative, "preparation provenance")])
+        if sensor == "IIRS":
+            group["spectral_reductions"] = [{k: rep[k] for k in ("name", "band_indices", "official_band_numbers", "wavelengths")}
+                                             for rep in prior["representations"]]
+            group["scientific_values"] = "RAW DN, not calibrated radiance"
+        groups.append(group)
+    evidence_paths = {"configs/milestone_20.json", "results/milestone_20_experiments/experiments.json",
+        "results/milestone_08_registration/registration_metadata.json",
+        "results/experiment_tycho_map_projected/loftr_0.20_matches.npz",
+        "data/processed/tycho/registered/tmc_registered_to_wac.tif"}
+    evidence_paths.update(receipt("results/milestone_08_registration/registration_metadata.json")["input_sha256"])
+    for record in records:
+        evidence_paths.add(record["configuration"]["report_path"])
+        evidence_paths.update(p["path"] for p in (record["provenance"].get("prior_reports") or {}).values())
+        evidence_paths.update(a["path"] for a in record.get("artifacts", []))
+        demo = next((d for d in DEMOS if d.experiment == record["name"]), None)
+        if demo:
+            evidence_paths.update(str(a.path) for a in historical_artifacts(root, demo, record))
+    return dict(schema_version=1, mode="validated_prepared_inputs_and_historical_evidence",
+                note="Logical input set; no duplicated imagery, region search, threshold tuning or inference",
+                pairs=groups, evidence=[identity(p, "required saved evidence or final product") for p in sorted(evidence_paths)])
+
+
 def build_package(root: Path, output: Path) -> dict:
     """Run the complete established import matrix into a fresh results directory."""
     from src.evaluation.final_validation import validate_package
@@ -292,6 +375,7 @@ def build_package(root: Path, output: Path) -> dict:
         write_json(evidence / name, json.loads(path.read_text(encoding="utf-8")))
     runner = ExperimentRunner(root)
     records = [package_experiment(root, output, runner.run(c)) for c in configs]
+    write_json(output / "prepared_inputs.json", prepared_inputs(root, records))
     write_json(output / "experiments.json", dict(schema_version=1, experiments=records))
     write_csv(output / "comparison.csv", comparison(records))
     headline = next(r for r in records if r["name"] == "TMC saved LoFTR")

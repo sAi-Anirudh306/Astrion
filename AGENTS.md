@@ -561,22 +561,11 @@ Do not automatically continue.
 
 # 23. CURRENT TASK
 
-The current milestone is TMC ingestion.
+M21 is complete. The latest authorized task is final repository cleanup and
+clean reproduction, preserving the nine-experiment validated scientific matrix.
+See README.md, FINAL_VALIDATION.md and REPOSITORY_CLEANUP.md for the current
+layout, reproduction command and audit. The structure above records the original
+development baseline; the implementation has since advanced through M21.
 
-Implement only:
-
-src/ingestion/metadata.py
-src/ingestion/tmc_loader.py
-src/ingestion/image_loader.py
-
-Do not implement SIFT yet.
-
-Do not implement matching yet.
-
-Do not implement RANSAC yet.
-
-Do not implement OHRC yet.
-
-Do not implement IIRS yet.
-
-First make real Borrow K TMC ingestion reliable and testable.
+Do not start another scientific milestone, arbitrary custom-file execution or
+ASTRION v2 without explicit authorization. Do not commit or tag automatically.
