@@ -1,6 +1,7 @@
 """Optional Streamlit interaction smoke tests; no screenshot/pixel assertions."""
 import importlib.util
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -25,55 +26,92 @@ class UIAppTests(unittest.TestCase):
         self.assertIn("Checkerboard", app.selectbox[0].options)
 
     def test_final_product_exports_respect_reliability(self):
-        app = self.app()
+        from streamlit.testing.v1 import AppTest
+
+        def exports(case):
+            from pathlib import Path
+            from app import final_products
+            from src.ui.service import DEMOS, load_results
+            demo = next(d for d in DEMOS if d.key == case)
+            final_products(load_results(Path.cwd())[demo.experiment])
+
         for case in ("tmc", "ohrc", "iirs"):
-            app.button_group(key="demo").set_value(case).run()
+            app = AppTest.from_function(exports, args=(case,), default_timeout=30).run()
             self.assertFalse(app.exception)
             labels = [button.label for button in app.get("download_button")]
             self.assertIn("Download corresponding match points (CSV)", labels)
             self.assertEqual("Download registered GeoTIFF" in labels, case == "tmc")
             self.assertEqual("Download verified inliers (CSV)" in labels, case == "tmc")
 
-    def test_all_cases_both_modes(self):
+    def test_pitch_uses_tmc_in_both_modes(self):
         app = self.app()
-        for case in ("tmc", "ohrc", "iirs"):
-            app.button_group(key="demo").set_value(case).run()
-            for mode in ("Quick Result", "Watch Pipeline"):
-                app.button_group(key="mode").set_value(mode).run()
-                self.assertFalse(app.exception, (case, mode))
-                markup = "\n".join(m.value for m in app.markdown)
-                if case != "tmc" and mode == "Quick Result":
-                    self.assertTrue("INSUFFICIENT SUPPORT" in markup)
-                    self.assertTrue("REGISTRATION WITHHELD" in markup)
-                if mode == "Watch Pipeline":
-                    begin = [b for b in app.button if b.label == "Begin walkthrough"]
-                    if begin:
-                        begin[0].click().run()
-                    self.assertEqual(len(app.select_slider[0].options), 12)
-                    app.select_slider[0].set_value(6).run()
-                    self.assertFalse(app.exception)
+        app.session_state["demo"] = "iirs"  # Ignore selection left by the previous UI.
+        for mode in ("Quick Result", "Show Pipeline"):
+            app.button_group(key="mode").set_value(mode).run()
+            self.assertFalse(app.exception, mode)
+            self.assertNotIn("demo", [group.key for group in app.button_group])
+            markup = "\n".join(m.value for m in app.markdown)
+            self.assertIn("Chandrayaan-2 TMC-2", markup)
+            self.assertNotIn("REGISTRATION WITHHELD", markup)
 
     def test_missing_optional_artifacts(self):
+        # Load the controller before patching so its module-level import is not
+        # permanently bound to this test's empty-artifact mock.
+        import src.ui.pipeline
+
         with patch("src.ui.service.artifacts", return_value=()):
             app = self.app()
             self.assertFalse(app.exception)
             self.assertTrue(any("No prepared images" in c.value for c in app.caption))
-            app.button_group(key="mode").set_value("Watch Pipeline").run()
+            app.button_group(key="mode").set_value("Show Pipeline").run()
             self.assertFalse(app.exception)
 
-    def test_watch_has_outputs_without_bottom_accordions(self):
+    def test_pitch_pipeline_completes_and_returns_to_quick_result(self):
         app = self.app()
-        app.button_group(key="mode").set_value("Watch Pipeline").run()
-        next(b for b in app.button if b.label == "Begin walkthrough").click().run()
-        next(b for b in app.button if b.label == "Show final output").click().run()
+        app.button_group(key="mode").set_value("Show Pipeline").run()
+        next(b for b in app.button if b.label == "Run ASTRION").click().run()
         self.assertFalse(app.exception)
-        self.assertFalse(app.expander)
+        self.assertTrue(app.session_state["pitch_done_tmc"], [e.value for e in app.error])
         self.assertGreater(len(app.get("image")), 2)
         markup = "\n".join(m.value for m in app.markdown)
-        self.assertIn("Final ASTRION Output", markup)
+        self.assertIn("ASTRION evidence ready", markup)
         self.assertIn("RELIABLE", markup)
         app.button_group(key="mode").set_value("Quick Result").run()
         self.assertIn("Technical details & reproducibility", [e.label for e in app.expander])
+
+    def test_slider_is_inside_overlay_tab_with_static_artifact(self):
+        if importlib.util.find_spec("streamlit_image_comparison") is None:
+            self.skipTest("Optional slider package unavailable")
+        app = self.app()
+        comparison = next(e for e in app.expander if e.label == "Registration comparison")
+        self.assertEqual([tab.label for tab in comparison.tabs],
+                         ["Before / after", "Overlay", "Checkerboard"])
+        before, overlay, checkerboard = comparison.tabs
+        self.assertFalse(before.get("iframe"))
+        self.assertFalse(checkerboard.get("iframe"))
+        slider_html = overlay.get("iframe")[0].proto.srcdoc
+        self.assertLess(slider_html.index("Before Registration"),
+                        slider_html.index("After Registration"))
+        self.assertEqual(len(overlay.get("image")), 1)
+        self.assertIn("**Final Registration Overlay**", [m.value for m in overlay.markdown])
+
+    def test_missing_slider_package_shows_side_by_side_views(self):
+        with patch.dict(sys.modules, {"streamlit_image_comparison": None}):
+            app = self.app()
+        self.assertFalse(app.exception)
+        overlay = next(tab for tab in app.tabs if tab.label == "Overlay")
+        self.assertFalse(overlay.get("iframe"))
+        captions = [image.caption for item in overlay.get("image") for image in item.proto.imgs]
+        self.assertEqual(captions[:2], ["Before Registration", "After Registration"])
+        self.assertEqual(len(captions), 3)  # Includes the original overlay.
+
+    def test_missing_tmc_does_not_select_another_sensor(self):
+        from src.ui.service import DEMOS
+        with patch("src.ui.service.discover_demos", return_value=DEMOS[1:]):
+            app = self.app()
+        self.assertFalse(app.exception)
+        self.assertIn("validated TMC-2", app.info[0].value)
+        self.assertFalse(app.get("download_button"))
 
     def test_missing_result_has_friendly_error(self):
         with patch("src.ui.service.discover_demos", side_effect=FileNotFoundError("Missing report")):
