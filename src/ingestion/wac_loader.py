@@ -15,6 +15,95 @@ from .metadata import read_metadata
 from .tmc_loader import row_subregion_footprint
 
 
+def localize_tmc_reference(label_path: str | Path, wac_path: str | Path,
+                           output_path: str | Path, *, margin_km: float = 5.) -> dict:
+    """Mode A: full TMC label -> lunar boundary -> automatically extracted WAC ROI.
+
+    Accepts no manual coordinates or old crop. Margin is in the WAC map plane,
+    not surface distance on the foreshortened orthographic limb. Full footprint
+    coverage is mandatory; only excess safety margin may be clipped to raster.
+    """
+    from src.geometry.georeferencing import FootprintMapping
+    if (isinstance(margin_km, bool) or not isinstance(margin_km, Real)
+            or not np.isfinite(margin_km) or margin_km < 0):
+        raise ValueError('Margin must be finite nonnegative map kilometres')
+    metadata = read_metadata(label_path)
+    if (metadata.get('target') or '').lower() != 'moon':
+        raise ValueError('TMC reference localization requires a lunar observation')
+    corners = row_subregion_footprint(metadata, 0, metadata['image_height'])
+    mapping = FootprintMapping(corners, metadata['image_height'], metadata['image_width'])
+    boundary = mapping.boundary()
+    with rasterio.open(wac_path) as source:
+        if (not np.isclose(source.res[0], source.res[1]) or source.transform.b != 0
+                or source.transform.d != 0 or source.transform.a <= 0 or source.transform.e >= 0):
+            raise ValueError('Expected north-up WAC with square map pixels')
+        margin_pixels = margin_km*1000/source.res[0]
+    result = extract_geolocated_wac(wac_path, boundary, output_path,
+                                   margin_pixels=margin_pixels, clip_margin=True)
+    result.update(mode='A: metadata-guided', source_label=str(Path(label_path).resolve()),
+        source_product_id=metadata['logical_identifier'], metadata=metadata, corners=corners,
+        geographic_boundary=boundary.tolist(), margin_map_km=float(margin_km),
+        manual_crop_coordinates_supplied=False, old_reference_crop_used=False,
+        method='Full product four-corner bilinear footprint, 257 samples/edge, lunar PROJ transform, outward window rounding',
+        limitation='Approximate pixel-center corners; no camera/DEM orthorectification or independent geographic truth')
+    return result
+
+
+def footprint_window(geographic_points: np.ndarray, crs: CRS, grid,
+                     shape: tuple[int, int], *, margin_pixels: float = 1.,
+                     clip_margin: bool = False) -> tuple[Window, dict]:
+    """Project sampled lunar boundary points and outward-round a raster window.
+
+    Pixel bounds use raster edges (column,row), not center indices. Only the
+    safety margin may be clipped; an uncovered footprint always raises. The
+    caller supplies dense boundary samples to account for projection curvature.
+    """
+    from src.geometry.georeferencing import project_coordinates
+    if crs is None or not crs.is_projected:
+        raise ValueError('WAC must have a projected lunar CRS')
+    if (isinstance(margin_pixels, bool) or not isinstance(margin_pixels, Real)
+            or not np.isfinite(margin_pixels) or margin_pixels < 0):
+        raise ValueError('Margin must be finite nonnegative pixels')
+    if not isinstance(clip_margin, bool):
+        raise ValueError('clip_margin must be boolean')
+    if len(shape) != 2 or any(isinstance(n, bool) or not isinstance(n, (int, np.integer)) or n < 1 for n in shape):
+        raise ValueError('Raster shape must contain positive integer dimensions')
+    points = np.asarray(geographic_points, float)
+    if (points.ndim != 2 or points.shape[1] != 2 or not len(points)
+            or not np.isfinite(points).all() or np.any(np.abs(points[:, 1]) > 90)):
+        raise ValueError('Expected finite Nx2 lunar longitude/latitude coordinates')
+    try:
+        projected = project_coordinates(points, crs)
+    except Exception as exc:
+        # GDAL also emits CPLE_* exceptions outside RasterioError's hierarchy.
+        # Preserve the cause while exposing a clear ingestion boundary error.
+        raise ValueError(f'Footprint could not be transformed into visible WAC projection: {exc}') from exc
+    if not np.isfinite(projected).all():
+        raise ValueError('Footprint outside visible WAC projection')
+    xy = np.array([~grid @ tuple(p) for p in projected])
+    lower, upper = xy.min(0), xy.max(0)
+    extent = np.array(shape[::-1])
+    if np.any(lower < 0) or np.any(upper > extent):
+        raise ValueError('Complete footprint not covered by WAC bounds')
+    lo = np.floor(lower).astype(int) - int(np.ceil(margin_pixels))
+    hi = np.ceil(upper).astype(int) + int(np.ceil(margin_pixels))
+    requested = [*lo.tolist(), *hi.tolist()]
+    clipped = bool(np.any(lo < 0) or np.any(hi > extent))
+    if clipped and not clip_margin:
+        raise ValueError('Complete footprint margin not covered by WAC bounds')
+    lo, hi = np.maximum(lo, 0), np.minimum(hi, extent)
+    if np.any(hi <= lo):
+        raise ValueError('Footprint produces an empty window')
+    window = Window(int(lo[0]), int(lo[1]), int(hi[0]-lo[0]), int(hi[1]-lo[1]))
+    return window, dict(predicted_pixel_bounds=[*lower.tolist(), *upper.tolist()],
+        projected_footprint_bounds=[*projected.min(0).tolist(), *projected.max(0).tolist()],
+        projected_boundary=projected.tolist(), pixel_boundary=xy.tolist(),
+        requested_pixel_bounds=requested, automatic_pixel_bounds=[*lo.tolist(), *hi.tolist()],
+        margin_pixels_requested=float(margin_pixels), margin_pixels_rounded=int(np.ceil(margin_pixels)),
+        margin_clipped=clipped, footprint_fully_covered=True,
+        coordinate_convention='Raster edge (column,row); bounds [left,top,right,bottom], stop exclusive')
+
+
 def signed_longitude(longitude: float) -> float:
     """Convert finite degrees east (including 0..360) to [-180, 180)."""
     if isinstance(longitude, bool) or not isinstance(longitude, Real) or not np.isfinite(longitude):
@@ -23,14 +112,16 @@ def signed_longitude(longitude: float) -> float:
 
 
 def extract_geolocated_wac(wac_path: str | Path, geographic_points: np.ndarray,
-                           output_path: str | Path) -> dict:
+                           output_path: str | Path, *, margin_pixels: float = 1.,
+                           clip_margin: bool = False) -> dict:
     """Extract a covered bounding window using supplied lon/lat controls.
 
     Uses all supplied control/boundary points, never substitutes TMC corners.
-    One raster pixel of padding; full footprint must lie inside the raster and
+    One raster pixel of padding by default; full footprint must lie inside the raster and
     visible lunar orthographic domain. Values, nodata, CRS and mask preserved.
+    Optional safety margin clipping never clips the predicted footprint itself.
     """
-    from src.geometry.georeferencing import project_coordinates, lunar_geographic_crs
+    from src.geometry.georeferencing import lunar_geographic_crs
     path = Path(output_path)
     if path.exists():
         raise FileExistsError(path)
@@ -38,16 +129,12 @@ def extract_geolocated_wac(wac_path: str | Path, geographic_points: np.ndarray,
     if points.ndim != 2 or points.shape[1] != 2 or not len(points) or not np.isfinite(points).all():
         raise ValueError('Expected finite Nx2 geolocation controls')
     with rasterio.open(wac_path) as source:
-        lunar_geographic_crs(source.crs)
-        projected = project_coordinates(points, source.crs)
-        if not np.isfinite(projected).all():
-            raise ValueError('Geolocation outside visible WAC projection')
-        inverse = ~source.transform
-        xy = np.array([inverse @ tuple(p) for p in projected])
-        lo, hi = np.floor(xy.min(0)).astype(int)-1, np.ceil(xy.max(0)).astype(int)+1
-        if np.any(lo < 0) or np.any(hi > [source.width, source.height]):
-            raise ValueError('Complete OHRC footprint not covered by WAC bounds')
-        window = Window(int(lo[0]), int(lo[1]), int(hi[0]-lo[0]), int(hi[1]-lo[1]))
+        if source.count != 1:
+            raise ValueError('Expected a single-band WAC reference')
+        window, localization = footprint_window(points, source.crs, source.transform,
+            source.shape, margin_pixels=margin_pixels, clip_margin=clip_margin)
+        lo = [int(window.col_off), int(window.row_off)]
+        hi = [int(window.col_off+window.width), int(window.row_off+window.height)]
         data, mask = source.read(1, window=window), source.read_masks(1, window=window)
         if not (mask > 0).any():
             raise ValueError('WAC crop has no valid reference pixels')
@@ -58,6 +145,7 @@ def extract_geolocated_wac(wac_path: str | Path, geographic_points: np.ndarray,
             with rasterio.open(path, 'w', **profile) as target:
                 target.write(data, 1)
                 target.write_mask(mask)
+                target.update_tags(**source.tags())
         left, bottom, right, top = bounds(window, source.transform)
         lon, lat = transform(source.crs, lunar_geographic_crs(source.crs),
                              [left, right, right, left], [bottom, bottom, top, top])
@@ -68,7 +156,8 @@ def extract_geolocated_wac(wac_path: str | Path, geographic_points: np.ndarray,
             projected_bounds=[left, bottom, right, top],
             transform=list(profile['transform']), crs=source.crs.to_wkt(), resolution=list(source.res),
             nodata=source.nodata, shape=list(data.shape), valid_pixels=int((mask > 0).sum()),
-            window=dict(column_start=int(lo[0]), row_start=int(lo[1]), column_stop=int(hi[0]), row_stop=int(hi[1])))
+            window=dict(column_start=int(lo[0]), row_start=int(lo[1]), column_stop=int(hi[0]), row_stop=int(hi[1])),
+            localization=localization)
     with rasterio.open(path) as saved:
         np.testing.assert_array_equal(saved.read(1), data)
         np.testing.assert_array_equal(saved.read_masks(1), mask)

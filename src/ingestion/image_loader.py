@@ -13,7 +13,8 @@ class ImageData:
     """Original decoded pixels and provenance, without scaling or normalization.
 
     ``raw`` denotes scientific samples; ``browse`` denotes a supplied preview.
-    Pixels are an independent in-memory array, never a writable source mapping.
+    Pixels are an independent array or an explicitly requested read-only mapping;
+    sensor loaders never return a writable source mapping.
     """
 
     data: NDArray[Any]

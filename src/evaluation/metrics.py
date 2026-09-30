@@ -10,6 +10,36 @@ from src.geometry.registration import transform_points
 from src.spatial.spatial_distribution import distribution_statistics
 
 
+def localization_overlap(predicted_bounds, comparison_bounds, metres_per_pixel: float,
+                         *, same_observation: bool) -> dict:
+    """Compare WAC edge-coordinate rectangles, without inventing geographic truth.
+
+    Center displacement of differently sized ROIs is descriptive, not positional
+    error. Even a same-observation crop is only approximate evaluation evidence.
+    Unrelated observations explicitly have no localization-error measurement.
+    """
+    rectangles = _real([predicted_bounds, comparison_bounds], 'ROI bounds')
+    if rectangles.shape != (2, 4) or np.any(rectangles[:, 2:] <= rectangles[:, :2]):
+        raise ValueError('Expected nonempty [left,top,right,bottom] rectangles')
+    if not isinstance(same_observation, bool):
+        raise ValueError('same_observation must be boolean')
+    pixel_to_map_distance(np.zeros(1), metres_per_pixel)
+    a, b = rectangles
+    overlap = np.maximum(0, np.minimum(a[2:], b[2:])-np.maximum(a[:2], b[:2]))
+    intersection = float(np.prod(overlap))
+    area_a, area_b = np.prod(a[2:]-a[:2]), np.prod(b[2:]-b[:2])
+    delta = (a[:2]+a[2:]-b[:2]-b[2:])/2
+    displacement = float(np.linalg.norm(delta))
+    return dict(iou=intersection/float(area_a+area_b-intersection),
+        comparison_area_covered=intersection/float(area_b),
+        contains_comparison=bool(np.all(a[:2] <= b[:2]) and np.all(a[2:] >= b[2:])),
+        center_delta_pixels=delta.tolist(), center_displacement_pixels=displacement,
+        center_displacement_map_km=displacement*float(metres_per_pixel)/1000,
+        same_observation=same_observation, localization_error_pixels=None, localization_error_km=None,
+        interpretation=('ROI overlap only; no independent control points or absolute error available'
+                        if same_observation else 'Unrelated observation: not localization ground truth'))
+
+
 def _real(values: np.ndarray, name: str) -> np.ndarray:
     array = np.asarray(values)
     if array.dtype.kind not in "fiu" or not np.isfinite(array).all():

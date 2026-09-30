@@ -21,7 +21,7 @@ def _dtype(data_type: str) -> np.dtype[Any]:
 
 
 def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any],
-              row_range: tuple[int, int] | None = None) -> NDArray[Any]:
+              row_range: tuple[int, int] | None = None, *, mmap: bool = False) -> NDArray[Any]:
     """Validate the complete binary layout before reading unchanged samples."""
     height, width = metadata["image_height"], metadata["image_width"]
     offset = metadata["offset_bytes"]
@@ -41,7 +41,8 @@ def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any],
             raise ValueError("Row extraction requires contiguous Sample values within each Line")
         offset += start * width * dtype.itemsize
         height = stop - start
-    samples = np.fromfile(path, dtype=dtype, count=height * width, offset=offset)
+    samples = (np.memmap(path, dtype=dtype, mode="r", shape=(height * width,), offset=offset)
+               if mmap else np.fromfile(path, dtype=dtype, count=height * width, offset=offset))
     if samples.size != height * width:
         raise ValueError(f"File-size mismatch while reading {path}: incomplete image data")
     sequence = metadata["axis_sequence"]
@@ -53,7 +54,7 @@ def _read_raw(path: Path, metadata: dict[str, Any], dtype: np.dtype[Any],
 
 def load_tmc_image(
     image_path: str | Path, metadata_path: str | Path | None = None,
-    *, row_range: tuple[int, int] | None = None,
+    *, row_range: tuple[int, int] | None = None, mmap: bool = False,
 ) -> ImageData:
     """Load TMC .img samples or a browse .png, preserving dtype and values.
 
@@ -64,6 +65,7 @@ def load_tmc_image(
     those rows are read. Source metadata stays intact, with a subset record.
     PNG dimensions/dtype describe decoded pixels, while file_size describes
     the compressed file. No calibration or visualization conversion is applied.
+    mmap=True returns a read-only mapping for raw products, after all checks.
     """
     path = Path(image_path).resolve()
     label = Path(metadata_path).resolve() if metadata_path is not None else path.with_suffix(".xml")
@@ -71,6 +73,8 @@ def load_tmc_image(
         raise FileNotFoundError(f"Image file not found: {path}")
     if path.suffix.lower() not in {".img", ".png"}:
         raise ValueError(f"Unsupported TMC image format: {path.suffix}")
+    if not isinstance(mmap, bool) or (mmap and path.suffix.lower() != ".img"):
+        raise ValueError("mmap must be boolean and is supported only for raw .img products")
     metadata = read_metadata(label)
     instrument = (metadata.get("instrument") or "").strip().lower()
     if instrument not in {"terrain mapping camera", "tmc", "tmc-2", "tmc2"}:
@@ -92,7 +96,7 @@ def load_tmc_image(
         if path.suffix.lower() != ".img":
             raise ValueError("Row extraction is supported only for raw .img products")
     if path.suffix.lower() == ".img":
-        data = _read_raw(path, metadata, dtype, row_range)
+        data = _read_raw(path, metadata, dtype, row_range, mmap=mmap)
         kind = "raw"
     else:
         if metadata["offset_bytes"] != 0:

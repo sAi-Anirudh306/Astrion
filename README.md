@@ -8,6 +8,11 @@ validated experiments are lunar, not evidence of general planetary invariance.
 
 ## Validated result
 
+The separate [V2 Experiment 1A](V2_AUTO_LOCALIZATION.md) evaluates automatic
+metadata-guided localization from the original Borrow K product and large WAC
+mosaic. Its new evidence is under `results/v2_auto_localization`; it does not
+replace the preserved v1 matrix below.
+
 The final matrix contains **9 experiments: 1 reliable registration and 8 withheld
 registrations**. The TMC saved-LoFTR positive control has 677 candidate matches,
 569 verified inliers, an 84.0473% inlier ratio, 1.164206529 px fitted residual

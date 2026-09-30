@@ -49,6 +49,17 @@ class FootprintMapping:
     def _evaluate(self, uv: np.ndarray) -> np.ndarray:
         return self.a + uv[:, :1]*self.b + uv[:, 1:]*self.c + np.prod(uv, axis=1)[:, None]*self.d
 
+    def boundary(self, samples_per_edge: int = 257) -> np.ndarray:
+        """Densely sample the closed image-center perimeter in lunar lon/lat."""
+        if (isinstance(samples_per_edge, bool) or not isinstance(samples_per_edge, Integral)
+                or samples_per_edge < 2):
+            raise ValueError('Boundary needs at least two integer samples per edge')
+        corners = np.array([[0, 0], [self.width-1, 0],
+                            [self.width-1, self.height-1], [0, self.height-1], [0, 0]])
+        pixels = np.concatenate([np.linspace(a, b, samples_per_edge)
+                                 for a, b in zip(corners[:-1], corners[1:])])
+        return self.forward(pixels)
+
     def forward(self, pixels: np.ndarray) -> np.ndarray:
         """Map an (N,2) pixel-center array to geographic lon/lat degrees."""
         pixels = np.asarray(pixels, dtype=float)

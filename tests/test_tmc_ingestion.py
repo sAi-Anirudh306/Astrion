@@ -87,6 +87,34 @@ class TMCUnitTests(unittest.TestCase):
         self.label.rename(other)
         self.assertEqual(load_tmc_image(self.path, other).data.shape, (2, 3))
 
+    def test_read_only_mapping_matches_regular_ingestion(self) -> None:
+        mapped = load_tmc_image(self.path, mmap=True).data
+        self.assertIsInstance(mapped, np.memmap)
+        np.testing.assert_array_equal(mapped, load_tmc_image(self.path).data)
+        with self.assertRaises(ValueError):
+            mapped[0, 0] = 10
+        mapped._mmap.close()
+
+    def test_mapping_preserves_offset_layout_and_row_window(self) -> None:
+        self.path.write_bytes(b'head' + self.path.read_bytes())
+        self.change('offset', '4')
+        self.change('file_size', '16')
+        mapped = load_tmc_image(self.path, row_range=(1, 2), mmap=True).data
+        np.testing.assert_array_equal(mapped, [[2, 4660, 0]])
+        mapped._mmap.close()
+        self.change('axis_index_order', 'First Index Fastest')
+        mapped = load_tmc_image(self.path, mmap=True).data
+        np.testing.assert_array_equal(mapped, load_tmc_image(self.path).data)
+        mapped._mmap.close()
+
+    def test_mapping_validates_file_size_and_format(self) -> None:
+        self.change('file_size', '11')
+        with self.assertRaisesRegex(ValueError, 'File-size mismatch'):
+            load_tmc_image(self.path, mmap=True)
+        self.make_png()
+        with self.assertRaisesRegex(ValueError, 'only for raw'):
+            load_tmc_image(self.path, mmap=True)
+
     def test_offset(self) -> None:
         self.path.write_bytes(b"head" + self.path.read_bytes())
         self.change("offset", "4")
